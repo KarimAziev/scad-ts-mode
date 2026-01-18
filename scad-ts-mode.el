@@ -30,6 +30,11 @@
 
 ;;; Code:
 
+(require 'cc-mode)
+(eval-when-compile
+  (require 'cc-langs)
+  (require 'cc-fonts)
+  (require 'cl-lib))
 (require 'scad-mode)
 (require 'treesit)
 
@@ -41,20 +46,9 @@
  'treesit-language-source-alist
  '(openscad "https://github.com/openscad/tree-sitter-openscad"))
 
-(defcustom scad-ts-mode-indent-offset 2
-  "Indentation width for `scad-ts-mode'."
-  :group 'openscad
-  :type 'integer
-  :safe 'integerp)
-
 (defvar scad-ts-mode--syntax-table
   (let ((table (make-syntax-table)))
-    ;; C-style comments.
-    (modify-syntax-entry ?/ ". 124b" table)
-    (modify-syntax-entry ?* ". 23" table)
-    (modify-syntax-entry ?\n "> b" table)
-    ;; Strings.
-    (modify-syntax-entry ?\" "\"" table)
+    (c-populate-syntax-table table)
     table)
   "Syntax table for `scad-ts-mode'.")
 
@@ -125,26 +119,6 @@
     (function variable operator delimiter bracket))
   "Font-lock feature list for `scad-ts-mode'.")
 
-(defvar scad-ts-mode--indent-rules
-  `((openscad
-     ((parent-is "source_file") column-0 0)
-     ((node-is "}") parent-bol 0)
-     ((node-is ")") parent-bol 0)
-     ((parent-is "union_block") parent-bol ,scad-ts-mode-indent-offset)
-     ((parent-is "if_block") parent-bol ,scad-ts-mode-indent-offset)
-     ((parent-is "for_block") parent-bol ,scad-ts-mode-indent-offset)
-     ((parent-is "intersection_for_block")
-      parent-bol ,scad-ts-mode-indent-offset)
-     ((parent-is "let_block") parent-bol ,scad-ts-mode-indent-offset)
-     ((parent-is "assign_block") parent-bol ,scad-ts-mode-indent-offset)
-     ((parent-is "module_item") parent-bol ,scad-ts-mode-indent-offset)
-     ((parent-is "function_item") parent-bol ,scad-ts-mode-indent-offset)
-     ((parent-is "transform_chain") parent-bol ,scad-ts-mode-indent-offset)
-     ((parent-is "arguments") parent-bol ,scad-ts-mode-indent-offset)
-     ((parent-is "parameters") parent-bol ,scad-ts-mode-indent-offset)
-     ((parent-is "assignments") parent-bol ,scad-ts-mode-indent-offset)))
-  "Indentation rules for `scad-ts-mode'.")
-
 (defvar scad-ts-mode--defun-type-regexp
   (rx bos (or "module_item" "function_item") eos)
   "Regexp describing defun-like nodes.")
@@ -170,10 +144,16 @@
 (define-derived-mode scad-ts-mode scad-mode "OpenSCAD"
   "Major mode for editing OpenSCAD using tree-sitter."
   :group 'openscad
+  :after-hook (c-update-modeline)
   :syntax-table scad-ts-mode--syntax-table
   (when (fboundp 'treesit-ensure-installed)
     (unless (treesit-ensure-installed 'openscad)
       (error "Tree-sitter grammar for OpenSCAD isn't available")))
+  (c-initialize-cc-mode t)
+  (c-init-language-vars scad-ts-mode)
+  (c-common-init 'scad-ts-mode)
+  (c-set-offset 'cpp-macro 0 nil)
+  (c-run-mode-hooks 'c-mode-common-hook)
   (setq treesit-primary-parser (treesit-parser-create 'openscad))
   ;; Comments.
   (setq-local comment-start "// ")
@@ -181,7 +161,6 @@
   (setq-local comment-start-skip "//+ *")
   ;; Indentation.
   (setq-local indent-tabs-mode nil)
-  (setq-local treesit-simple-indent-rules scad-ts-mode--indent-rules)
   ;; Font-lock.
   (setq-local treesit-font-lock-settings scad-ts-mode--font-lock-settings)
   (setq-local treesit-font-lock-feature-list
@@ -193,6 +172,8 @@
   (setq-local treesit-simple-imenu-settings scad-ts-mode--imenu-settings)
   (setq-local treesit-outline-predicate #'scad-ts-mode--outline-predicate)
   (treesit-major-mode-setup))
+
+(put 'scad-ts-mode 'c-mode-prefix "scad-ts-")
 
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.scad\\'" . scad-ts-mode))
