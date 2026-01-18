@@ -1,0 +1,171 @@
+#+OPTIONS: ^:nil tags:nil num:nil
+
+* About
+
+Tree-Sitter major mode for OpenSCAD.
+
+* Table of Contents                                       :TOC_2_gh:QUOTE:
+#+BEGIN_QUOTE
+- [[#about][About]]
+- [[#requirements][Requirements]]
+- [[#installation][Installation]]
+  - [[#grammar][Grammar]]
+  - [[#straightel][straight.el]]
+  - [[#quelpa][Quelpa]]
+  - [[#vc][VC]]
+  - [[#manual-installation][Manual installation]]
+  - [[#doom-emacs][Doom Emacs]]
+- [[#configuring-lsp-mode][Configuring lsp-mode]]
+#+END_QUOTE
+
+* Requirements
+
+| Name                         | Version |
+|------------------------------+---------|
+| Emacs (with treesit support) |    29.1 |
+| ~scad-mode~                  |    97.0 |
+
+
+* Installation
+
+** Grammar
+
+To use this mode, you should install the [[https://tree-sitter.github.io/tree-sitter/][Treesit]] grammar for OpenSCAD. There are two ways to do this.
+
+#+begin_quote
+[!IMPORTANT]
+
+Note: After installing the grammar, you will likely need to restart Emacs. Otherwise, even though the grammar is installed, it may report that it couldn't find it.
+#+end_quote
+
+*** Native
+
+To set it up, you'll need to set =treesit-language-source-alist= to point to the correct repository.
+#+begin_src elisp
+(add-to-list
+ 'treesit-language-source-alist
+ '(openscad "https://github.com/openscad/tree-sitter-openscad"))
+#+end_src
+
+Once that's set up, you'll need to run =treesit-install-language-grammar=. You can do this interactively (=M-x=), or by evaluating this snippet:
+
+#+begin_src elisp
+(treesit-install-language-grammar 'openscad)
+#+end_src
+
+Make sure you have a working C compiler available as =cc= in your PATH, since this needs to compile the grammar.
+
+
+
+
+*** Using treesit-auto
+
+#+begin_src elisp
+(use-package treesit-auto
+  :after treesit
+  :demand t
+  :config
+  (add-to-list 'treesit-auto-recipe-list
+               (make-treesit-auto-recipe
+                :lang 'openscad
+                :ts-mode 'openscad-ts-mode
+                :remap 'scad-mode
+                :url
+                "https://github.com/openscad/tree-sitter-openscad"
+                :ext "\\.scad\\'"))
+  (setq-default treesit-auto-langs
+                (seq-map 'treesit-auto-recipe-lang
+                         treesit-auto-recipe-list))
+  (setq treesit-auto-install t)
+  (when (fboundp 'global-treesit-auto-mode)
+    (global-treesit-auto-mode))
+  (when (fboundp 'treesit-auto-install-all)
+    (treesit-auto-install-all)))
+#+end_src
+
+#+html: <details><summary>
+** straight.el
+#+html: </summary>
+#+begin_src elisp :eval no
+(use-package scad-ts-mode
+  :straight (scad-ts-mode
+             :host github
+             :repo "KarimAziev/scad-ts-mode"
+             :type git
+             :flavor nil))
+#+end_src
+#+html: </details>
+
+#+html: <details><summary>
+** Quelpa
+#+html: </summary>
+#+begin_src elisp :eval no
+(use-package scad-ts-mode
+  :quelpa (scad-ts-mode
+           :fetcher github
+           :repo "KarimAziev/scad-ts-mode"))
+#+end_src
+#+html: </details>
+
+#+html: <details><summary>
+** VC
+#+html: </summary>
+Starting with Emacs 30, you can use use-package together with =package-vc.el=.
+#+begin_src elisp :eval no
+(use-package scad-ts-mode
+  :vc (:url "https://github.com/KarimAziev/scad-ts-mode"
+       :rev :newest))
+#+end_src
+#+html: </details>
+
+#+html: <details><summary>
+** Manual installation
+#+html: </summary>
+Download the source code and put it wherever you like, e.g. into =~/.emacs.d/scad-ts-mode/=
+#+begin_src shell :eval no
+git clone https://github.com/KarimAziev/scad-ts-mode.git ~/.emacs.d/scad-ts-mode/
+#+end_src
+Add the downloaded directory to the load path:
+#+begin_src elisp :eval no
+(add-to-list 'load-path "~/.emacs.d/scad-ts-mode/")
+(require 'scad-ts-mode)
+#+end_src
+#+html: </details>
+
+#+html: <details><summary>
+** Doom Emacs
+#+html: </summary>
+Add package definition to =DOOMDIR/packages.el= (e.g. =~/.doom.d/config.el=):
+#+begin_src elisp :eval no
+(package! scad-ts-mode
+          :recipe (:repo "KarimAziev/scad-ts-mode"))
+#+end_src
+Configure it in =DOOMDIR/config.el=:
+#+begin_src elisp
+(use-package! scad-ts-mode)
+#+end_src
+#+html: </details>
+* Configuring lsp-mode
+
+In =lsp-mode=, you should add =scad-ts-mode= to the major modes of =lsp-openscad=:
+
+#+begin_src elisp
+(require 'lsp)
+(require 'lsp-openscad)
+
+(lsp-register-client
+ (make-lsp-client
+  :new-connection (lsp-openscad-server-connection)
+  :major-modes '(scad-ts-mode scad-mode)
+  :priority -1
+  :initialized-fn (lambda (workspace)
+                    (let ((caps (lsp--workspace-server-capabilities
+                                 workspace)))
+                      (unless (lsp-get caps :completionProvider)
+                        (lsp:set-server-capabilities-completion-provider?
+                         caps t)))
+                    (with-lsp-workspace workspace
+                      (lsp--set-configuration
+                       (lsp-configuration-section "openscad"))))
+  :server-id 'openscad))
+#+end_src
