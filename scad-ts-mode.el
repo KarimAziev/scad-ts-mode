@@ -171,8 +171,9 @@
   "Major mode for editing OpenSCAD using tree-sitter."
   :group 'openscad
   :syntax-table scad-ts-mode--syntax-table
-  (unless (treesit-ensure-installed 'openscad)
-    (error "Tree-sitter grammar for OpenSCAD isn't available"))
+  (when (fboundp 'treesit-ensure-installed)
+    (unless (treesit-ensure-installed 'openscad)
+      (error "Tree-sitter grammar for OpenSCAD isn't available")))
   (setq treesit-primary-parser (treesit-parser-create 'openscad))
   ;; Comments.
   (setq-local comment-start "// ")
