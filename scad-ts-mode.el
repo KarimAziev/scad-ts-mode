@@ -52,6 +52,45 @@
     table)
   "Syntax table for `scad-ts-mode'.")
 
+
+(defun scad-ts-mode--buffer-root-node ()
+  "Return the root node of a parse tree in the current buffer."
+  (condition-case nil
+      (treesit-buffer-root-node 'openscad)
+    (treesit-no-parser
+     (treesit-parser-create 'openscad)
+     (treesit-buffer-root-node 'openscad))))
+
+(defun scad-ts-mode--imported-paths (&optional type)
+  "Extract imported include/use file paths, optionally filtering by statement type.
+
+Optional argument TYPE is a tree-sitter node type symbol, or nil by
+default to match `include_statement' and `use_statement'."
+  (let ((statements
+         (treesit-query-capture
+          (scad-ts-mode--buffer-root-node)
+          (if type
+              `((,type (include_path) @path))
+            '((include_statement (include_path) @path)
+              (use_statement (include_path) @path))))))
+    (mapcar (pcase-lambda (`(,_ . ,node))
+              (let ((txt (treesit-node-text node t)))
+                (substring-no-properties txt 1 (1- (length
+                                                    txt)))))
+            statements)))
+
+(defun scad-ts-mode--variable-declarations ()
+  (let ((statements
+         (treesit-query-capture
+          (scad-ts-mode--buffer-root-node)
+          '((var_declaration (assignment (identifier)) @identifier)))))
+    (mapcar (pcase-lambda (`(,_ . ,node))
+              (let ((txt (treesit-node-text node t)))
+                (cons txt node)))
+            statements)))
+
+
+
 (defvar scad-ts-mode--font-lock-settings
   (treesit-font-lock-rules
    :language 'openscad
