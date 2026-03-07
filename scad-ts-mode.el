@@ -31,27 +31,63 @@
 ;;; Code:
 
 (require 'cc-mode)
+
 (eval-when-compile
   (require 'cc-langs)
   (require 'cc-fonts)
   (require 'cl-lib))
+
 (require 'scad-mode)
 (require 'treesit)
 
-(declare-function treesit-parser-create "treesit.c")
-(declare-function treesit-node-child-by-field-name "treesit.c")
-(declare-function treesit-node-text "treesit.c")
+(defcustom scad-ts-mode-functions '("acos" "asin" "atan" "atan2" "abs" "cos"
+                                    "ceil" "cross" "concat" "chr" "dxf_dim"
+                                    "dxf_cross" "exp" "floor" "is_undef"
+                                    "is_list" "is_num" "is_bool" "is_string"
+                                    "is_function" "log" "ln" "lookup" "len"
+                                    "min" "max" "norm" "ord" "pow" "rands"
+                                    "round" "sin" "sign" "sqrt" "str" "search"
+                                    "tan" "version" "version_num")
+  "List of function names used for tree-sitter font-lock highlighting."
+  :group 'scad-ts
+  :type '(repeat string))
+
+(defcustom scad-ts-mode-modules '("children" "cube" "cylinder" "circle" "color"
+                                  "difference" "echo" "group" "hull"
+                                  "intersection" "import" "linear_extrude"
+                                  "mirror" "multmatrix" "minkowski" "offset"
+                                  "polyhedron" "polygon" "projection"
+                                  "parent_module" "rotate" "render"
+                                  "rotate_extrude" "resize" "roof" "sphere"
+                                  "square" "scale" "surface" "translate" "text"
+                                  "union")
+  "List of module names used for syntax highlighting.
+
+A list of OpenSCAD module names to highlight as built-in modules.
+
+Each element should be a string naming a module, without parentheses or
+arguments.
+
+Changing the list updates the tree-sitter font-lock settings used for
+highlighting."
+  :group 'scad-ts
+  :type '(repeat string))
+
+(defcustom scad-ts-indent-offset 2
+  "Number of spaces for each indentation step in `scat-ts-mode'."
+  :type 'natnum
+  :safe 'natnump
+  :group 'scad-ts)
 
 (add-to-list
  'treesit-language-source-alist
  '(openscad "https://github.com/openscad/tree-sitter-openscad"))
 
-(defvar scad-ts-mode--syntax-table
+(defvar scad-ts-mode-syntax-table
   (let ((table (make-syntax-table)))
     (c-populate-syntax-table table)
     table)
   "Syntax table for `scad-ts-mode'.")
-
 
 (defun scad-ts-mode--buffer-root-node ()
   "Return the root node of a parse tree in the current buffer."
@@ -80,91 +116,192 @@ default to match `include_statement' and `use_statement'."
             statements)))
 
 (defun scad-ts-mode--variable-declarations ()
+  "Collect variable declaration identifiers and return them paired with nodes."
   (let ((statements
          (treesit-query-capture
           (scad-ts-mode--buffer-root-node)
-          '((var_declaration (assignment (identifier)) @identifier)))))
+          '((var_declaration (assignment (identifier) @identifier))))))
     (mapcar (pcase-lambda (`(,_ . ,node))
               (let ((txt (treesit-node-text node t)))
                 (cons txt node)))
             statements)))
 
+(defun scad-ts-mode--local-variable-declarations ()
+  "Collect local variable names and nodes from let-block assignment identifiers."
+  (let ((statements
+         (treesit-query-capture
+          (scad-ts-mode--buffer-root-node)
+          '((let_block (assignments)  @identifier)))))
+    (mapcar (pcase-lambda (`(,_ . ,node))
+              (let ((txt (treesit-node-text node t)))
+                (cons txt node)))
+            statements)))
 
+(defun scad-ts-mode--match-any (items)
+  "Build a regexp matching exactly any string or symbol name in ITEMS.
+
+Argument ITEMS is a list of strings or symbols converted to strings."
+  (concat "\\`" (regexp-opt (mapcar
+                             (lambda (it)
+                               (if (symbolp it)
+                                   (symbol-name it)
+                                 it))
+                             items))
+          "\\'"))
+
+(defun scad-ts-mode--make-settings (modules functions)
+  "Build tree-sitter font-lock rules for OpenSCAD using MODULES and FUNCTIONS.
+
+Argument MODULES is a list of module names used to match builtins.
+
+Argument FUNCTIONS is a list of function names used to match builtins."
+  (apply #'treesit-font-lock-rules
+         `(:language openscad
+           :feature comment
+           ([(line_comment)
+             (block_comment)
+             (transform_chain (modifier "*"))]
+            @font-lock-comment-face)
+           :language openscad
+           :feature comment
+           ((modifier ["*" "!" "#" "%"]
+             @font-lock-comment-face))
+           :language openscad
+           :feature definition
+           ([(function_item name: (_)
+              @font-lock-function-name-face)
+             (module_item name: (_)
+              @font-lock-function-name-face)
+             (var_declaration (assignment name: (_)
+                               @font-lock-variable-name-face))
+             (parameters
+              (parameter
+               (assignment name: (_)
+                @font-lock-variable-name-face)))
+             (parameters
+              (parameter
+               (identifier) @font-lock-variable-name-face))])
+           :language openscad
+           :feature builtin
+           :override t
+           (((special_variable "$" (_))
+             @font-lock-builtin-face
+             (:match ,(scad-ts-mode--match-any '("$children" "$fs" "$fn"
+                                                 "$preview" "$t" "$vpr" "$vpt"
+                                                 "$vpd" "$vpf"))
+              @font-lock-builtin-face)))
+           :language openscad
+           :feature builtin
+           ((module_call name: (_) @font-lock-builtin-face
+             (:match ,(scad-ts-mode--match-any
+                       modules)
+              @font-lock-builtin-face)))
+           :language openscad
+           :feature builtin
+           ((function_call name: (_) @font-lock-builtin-face
+             (:match ,(scad-ts-mode--match-any
+                       functions)
+              @font-lock-builtin-face)))
+           :language openscad
+           :feature keyword
+           ((["assign" "each" "function" "let" "module"]
+             @font-lock-keyword-face)
+            ([(assert_statement "assert")
+              (assert_expression "assert")]
+             @font-lock-keyword-face)
+            ((boolean) @font-lock-keyword-face)
+            (["if" "else"] @font-lock-keyword-face)
+            (["for" "intersection_for"]
+             @font-lock-keyword-face))
+           :language openscad
+           :feature preprocessor
+           ([(include_statement)
+             (use_statement)]
+            @font-lock-preprocessor-face)
+           :language openscad
+           :feature string
+           ((string) @font-lock-string-face)
+           :language openscad
+           :feature constant
+           (((identifier) @font-lock-constant-face
+             (:equal @font-lock-constant-face "PI"))
+            (undef) @font-lock-constant-face
+            (arguments (assignment name: (_)
+                        @font-lock-constant-face)))
+           :language openscad
+           :override t
+           :feature escape-sequence
+           ((escape_sequence) @font-lock-escape-face)
+           :language openscad
+           :feature literal
+           ([(integer)
+             (float)]
+            @font-lock-number-face)
+           :language openscad
+           :feature bracket
+           (["(" ")" "[" "]" "{" "}"] @font-lock-bracket-face)
+           :language openscad
+           :feature delimiter
+           ([";" "," "."] @font-lock-delimiter-face)
+           :language openscad
+           :feature function
+           ([(module_call name: (identifier)
+              @font-lock-function-call-face)
+             (function_call name: (identifier)
+              @font-lock-function-call-face)])
+           :language openscad
+           :feature operator
+           ((["||" "&&" "==" "!=" "<" ">" "<=" ">=" "+"
+              "-" "*" "/" "%" "^" "!" ":" "="]
+             @font-lock-operator-face)
+            ((ternary_expression ["?" ":"]
+              @font-lock-operator-face))))))
+
+(defvar scad-ts-mode--indent-rules
+  `((openscad
+     ((parent-is "source_file") column-0 0)
+     ((node-is ")") parent-bol 0)
+     ((node-is "]") parent-bol 0)
+     ((node-is "}") standalone-parent 0)
+     ((node-is "else") standalone-parent 0)
+     ((parent-is "block") standalone-parent scad-ts-indent-offset)
+     ((parent-is "transform_chain") parent-bol scad-ts-indent-offset)
+     ((match nil "arguments" nil 2 nil)
+      (nth-sibling 1) 0)
+     ((match nil "parameters" nil 2 nil)
+      (nth-sibling 1) 0)
+     ((match nil "list" nil 2 nil)
+      (nth-sibling 1) 0)
+     ((match nil "assignments" nil 2 nil)
+      (nth-sibling 1) 0)
+     ((parent-is "arguments") parent-bol scad-ts-indent-offset)
+     ((parent-is "parameters")
+      (nth-sibling 0) 1)
+     ((parent-is "list") parent-bol scad-ts-indent-offset)
+     ((parent-is "assignments") parent-bol scad-ts-indent-offset)
+     ((parent-is "ERROR") parent-bol scad-ts-indent-offset)
+     ((node-is "ERROR") parent-bol scad-ts-indent-offset)
+     (no-node parent-bol scad-ts-indent-offset)))
+  "Tree-sitter indent rules for `scad-ts-mode'.")
 
 (defvar scad-ts-mode--font-lock-settings
-  (treesit-font-lock-rules
-   :language 'openscad
-   :feature 'comment
-   '((line_comment) @font-lock-comment-face
-     (block_comment) @font-lock-comment-face)
-   :language 'openscad
-   :feature 'string
-   :override t
-   '((string) @font-lock-string-face
-     (escape_sequence) @font-lock-escape-face)
-   :language 'openscad
-   :feature 'number
-   '([(integer)
-      (float)]
-     @font-lock-number-face)
-   :language 'openscad
-   :feature 'keyword
-   '(["module" "function" "let" "assign" "use" "include" "each"
-      "for" "intersection_for" "if" "else" "assert" "echo"]
-     @font-lock-keyword-face)
-   :language 'openscad
-   :feature 'operator
-   '(["||" "&&" "==" "!=" "<" ">" "<=" ">=" "+" "-" "*" "/" "%" "^" "!" ":" "="
-      "?"]
-     @font-lock-operator-face)
-   :language 'openscad
-   :feature 'bracket
-   '((["{" "}" "(" ")" "[" "]"]) @font-lock-bracket-face)
-   :language 'openscad
-   :feature 'delimiter
-   '(([";" "," "."]) @font-lock-delimiter-face)
-   :language 'openscad
-   :feature 'constant
-   '((boolean) @font-lock-constant-face
-     (undef) @font-lock-constant-face
-     ((identifier) @font-lock-constant-face
-      (:match "^PI$" @font-lock-constant-face)))
-   :language 'openscad
-   :feature 'builtin
-   `(((module_call name: (identifier) @font-lock-builtin-face)
-      (:match
-       "\\`\\(circle\\|color\\|cube\\|cylinder\\|difference\\|hull\\|intersection\\|linear_extrude\\|minkowski\\|mirror\\|multmatrix\\|offset\\|polygon\\|polyhedron\\|projection\\|resize\\|rotate\\|rotate_extrude\\|scale\\|sphere\\|square\\|surface\\|text\\|translate\\|union\\|echo\\)\\'"
-       @font-lock-builtin-face))
-     (special_variable) @font-lock-builtin-face)
-   :language 'openscad
-   :feature 'function
-   '((function_item name: (identifier) @font-lock-function-name-face)
-     (function_call name: (identifier) @font-lock-function-call-face)
-     (module_item name: (identifier) @font-lock-function-name-face)
-     (module_call name: (identifier) @font-lock-function-call-face))
-   :language 'openscad
-   :feature 'variable
-   '((parameter (identifier) @font-lock-variable-name-face)
-     (parameter (assignment name: (identifier) @font-lock-variable-name-face))
-     (assignment name: (identifier) @font-lock-variable-name-face)
-     (dot_index_expression index: (identifier) @font-lock-property-name-face)
-     (identifier) @font-lock-variable-name-face))
+  (scad-ts-mode--make-settings scad-ts-mode-modules scad-ts-mode-functions)
   "Tree-sitter font-lock settings for `scad-ts-mode'.")
 
 (defvar scad-ts-mode--font-lock-feature-list
-  '((comment)
-    (string number)
-    (keyword builtin constant)
-    (function variable operator delimiter bracket))
-  "Font-lock feature list for `scad-ts-mode'.")
+  '((comment definition)
+    (builtin keyword preprocessor string)
+    (constant escape-sequence literal)
+    (bracket delimiter function operator))
+  "Font-lock feature groups for syntax highlighting.")
 
 (defvar scad-ts-mode--defun-type-regexp
   (rx bos (or "module_item" "function_item") eos)
   "Regexp describing defun-like nodes.")
 
 (defvar scad-ts-mode--imenu-settings
-  '(( "Module" "\\`module_item\\'" nil nil)
-    ( "Function" "\\`function_item\\'" nil nil))
+  '(("Module" "\\`module_item\\'" nil nil)
+    ("Function" "\\`function_item\\'" nil nil))
   "Imenu configuration for `scad-ts-mode'.")
 
 (defun scad-ts-mode--defun-name (node)
@@ -182,9 +319,9 @@ default to match `include_statement' and `use_statement'."
 ;;;###autoload
 (define-derived-mode scad-ts-mode scad-mode "OpenSCAD"
   "Major mode for editing OpenSCAD using tree-sitter."
-  :group 'openscad
+  :group 'scad-ts
   :after-hook (c-update-modeline)
-  :syntax-table scad-ts-mode--syntax-table
+  :syntax-table scad-ts-mode-syntax-table
   (when (fboundp 'treesit-ensure-installed)
     (unless (treesit-ensure-installed 'openscad)
       (error "Tree-sitter grammar for OpenSCAD isn't available")))
@@ -200,6 +337,9 @@ default to match `include_statement' and `use_statement'."
   (setq-local comment-start-skip "//+ *")
   ;; Indentation.
   (setq-local indent-tabs-mode nil)
+  (setq-local treesit-simple-indent-rules scad-ts-mode--indent-rules)
+  (setq-local electric-indent-chars
+              (append "{}();" electric-indent-chars))
   ;; Font-lock.
   (setq-local treesit-font-lock-settings scad-ts-mode--font-lock-settings)
   (setq-local treesit-font-lock-feature-list
@@ -216,6 +356,42 @@ default to match `include_statement' and `use_statement'."
 
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.scad\\'" . scad-ts-mode))
+
+(defun scad-ts-mode--font-lock-updater (symbol newval operation &rest _)
+  "Update font-lock settings when modules or functions lists are set.
+
+Argument SYMBOL is the variable symbol being updated.
+
+Argument NEWVAL is the new value assigned to SYMBOL.
+
+Argument OPERATION is the update operation SYMBOL, expected to be `set'.
+
+Remaining arguments _ are ignored."
+  (when (eq operation 'set)
+    (let* ((args
+            (pcase symbol
+              ('scad-ts-mode-modules
+               (list newval scad-ts-mode-functions))
+              ('scad-ts-mode-functions
+               (list scad-ts-mode-modules newval)))))
+      (cond ((and (not (memq symbol '(scad-ts-mode-modules
+                                      scad-ts-mode-functions)))
+                  (not args))
+             (display-warning 'scad-ts
+                              (format
+                               "Unexpected symbol `%s' was set in watcher for `scad-ts-mode--font-lock-updater'"
+                               symbol)))
+            ((not args)
+             (display-warning 'scad-ts
+                              (format
+                               "Ignoring null value for `%s'"
+                               symbol)))
+            (t (setq scad-ts-mode--font-lock-settings
+                     (apply 'scad-ts-mode--make-settings args)))))))
+
+(add-variable-watcher 'scad-ts-mode-modules 'scad-ts-mode--font-lock-updater)
+
+(add-variable-watcher 'scad-ts-mode-functions 'scad-ts-mode--font-lock-updater)
 
 (provide 'scad-ts-mode)
 ;;; scad-ts-mode.el ends here
