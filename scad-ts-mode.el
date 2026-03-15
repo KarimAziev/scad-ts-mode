@@ -314,7 +314,7 @@ already represent a top view,the function will invoke its reverse command
 (defvar-local scad-ts-mode--preview-mode-camera nil)
 
 (defun scad-ts-preview-projection ()
-  "Toggle the preview projection between orthographic and perspective, then rerender."
+  "Toggle the preview projection between orthographic and perspective, then render."
   (interactive nil scad-ts-preview-mode)
   (setq-local scad-ts-preview-projection
               (if (eq scad-ts-preview-projection 'ortho)
@@ -331,8 +331,9 @@ already represent a top view,the function will invoke its reverse command
 
 (defun scad-ts-mode--preview-status (status)
   "Update mode line of preview buffer with STATUS."
-  (setq scad-ts-mode--preview-mode-camera (apply #'format "[%d %d %d] [%d %d %d] %d"
-                                                 scad-ts-preview-camera)
+  (setq scad-ts-mode--preview-mode-camera
+        (apply #'format "[%d %d %d] [%d %d %d] %d"
+               scad-ts-preview-camera)
         scad-ts-mode--preview-mode-status status)
   (force-mode-line-update))
 
@@ -455,10 +456,11 @@ mark."
                                      (concat basefile ".png"))
                                (rename-file outfile scad-ts-mode--preview-image)
                                (erase-buffer)
-                               (insert (propertize
-                                        "#" 'display
-                                        `(image :type png
-                                                :file ,scad-ts-mode--preview-image))))
+                               (insert
+                                (propertize
+                                 "#" 'display
+                                 `(image :type png
+                                         :file ,scad-ts-mode--preview-image))))
                              (scad-ts-mode--preview-status "Done"))))
                      (delete-file infile)
                      (delete-file outfile)))
@@ -502,7 +504,8 @@ mark."
 (defun scad-ts-mode--preview-change (&rest _)
   "Schedule a delayed preview rerender after changes, marking it stale."
   (if (not (buffer-live-p scad-ts--preview-buffer))
-      (remove-hook 'after-change-functions #'scad-ts-mode--preview-change 'local)
+      (remove-hook 'after-change-functions
+                   #'scad-ts-mode--preview-change 'local)
     (let ((buffer scad-ts--preview-buffer))
       (with-current-buffer buffer
         (scad-ts-mode--preview-kill)
@@ -2038,8 +2041,9 @@ If not provided, it defaults to the value of `scad-ts-preview-translation-step'.
   (unless scad-ts--enable-suffixes
     (setq scad-ts--enable-suffixes
           (let* ((vals (car (last
-                             (assoc-string "--enable"
-                                           scad-ts-preview--openscad-help-cache))))
+                             (assoc-string
+                              "--enable"
+                              scad-ts-preview--openscad-help-cache))))
                  (longest (+ 5
                              (apply #'max
                                     (or
@@ -2070,7 +2074,8 @@ If not provided, it defaults to the value of `scad-ts-preview-translation-step'.
                                          arg)))))
                                 (cond ((derived-mode-p
                                         'scad-ts-preview-mode)
-                                       (setq-local scad-ts-mode-openscad-extra-args next-val)
+                                       (setq-local scad-ts-mode-openscad-extra-args
+                                                   next-val)
                                        (scad-ts-mode--preview-render))
                                       (t
                                        (setq scad-ts-mode-openscad-extra-args next-val)))
