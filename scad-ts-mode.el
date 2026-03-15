@@ -37,8 +37,14 @@
   (require 'cc-fonts)
   (require 'cl-lib))
 
-(require 'scad-mode)
 (require 'treesit)
+
+(defgroup scad-ts nil
+  "A major mode for editing OpenSCAD code."
+  :link '(url-link :tag "Website" "https://github.com/KarimAziev/scad-ts-mode")
+  :link '(emacs-library-link :tag "Library Source" "scad-ts-mode.el")
+  :group 'languages
+  :prefix "scad-ts")
 
 (defcustom scad-ts-mode-functions '("acos" "asin" "atan" "atan2" "abs" "cos"
                                     "ceil" "cross" "concat" "chr" "dxf_dim"
@@ -79,6 +85,74 @@ highlighting."
   :safe 'natnump
   :group 'scad-ts)
 
+
+(defcustom scad-ts-mode-openscad-command "openscad"
+  "Command name or path used to run OpenSCAD for Flymake checks.
+
+Command used to invoke the OpenSCAD executable.
+
+The value should be a string naming an executable found in the variable
+`exec-path', or an absolute file name.
+
+Used by the Flymake backend to run OpenSCAD with \"-o\" to generate an
+AST file for diagnostics."
+  :group 'scad-ts
+  :type 'string)
+
+(defcustom scad-ts-mode-openscad-extra-args nil
+  "Extra command-line arguments appended to the OpenSCAD flymake command.
+
+Extra command line arguments passed to the OpenSCAD executable.
+
+The value is a list of strings, each string being one argument.
+
+The arguments are appended after the default arguments used for
+generating an AST file during Flymake runs.
+
+Example value: \\='(\"--backend=Manifold\" \"--enable=roof\")"
+  :type '(repeat string))
+
+(defcustom scad-ts-mode-debug nil
+  "Whether to allow debug logging.
+
+Debug messages are logged to the *scad-ts-mode-debug* buffer.
+
+If t, all messages will be logged.
+If a number, all messages will be logged, as well shown via `message'.
+If a list, it is a list of the types of messages to be logged."
+  :group 'scad-ts-mode
+  :type '(radio
+          (const :tag "none" nil)
+          (const :tag "all" t)
+          (checklist :tag "custom"
+           (integer :tag "Allow echo message buffer")
+           (const :tag "Flymake" flymake)
+           (symbol :tag "Other"))))
+
+
+(defun scad-ts-mode--debug (tag &rest args)
+  "Log debug messages based on the variable `scad-ts-mode-debug'.
+
+Argument TAG is a symbol or string used to identify the debug message.
+
+Remaining arguments ARGS are format string followed by objects to format,
+similar to `format' function arguments."
+  (when (and scad-ts-mode-debug
+             (or (eq scad-ts-mode-debug t)
+                 (numberp scad-ts-mode-debug)
+                 (and (listp scad-ts-mode-debug)
+                      (memq tag scad-ts-mode-debug))))
+    (with-current-buffer (get-buffer-create "*scad-ts-mode-debug*")
+      (goto-char (point-max))
+      (insert (format "%s" tag) " -> " (apply #'format args) "\n")
+      (when (numberp scad-ts-mode-debug)
+        (apply #'message args)))))
+
+
+(defconst scad-ts-mode--import-regexp
+  "\\_<\\(import\\)\\_>[\s]*("
+  "Regular expression matching SCAD import statements.")
+
 (add-to-list
  'treesit-language-source-alist
  '(openscad "https://github.com/openscad/tree-sitter-openscad"))
@@ -114,6 +188,43 @@ default to match `include_statement' and `use_statement'."
                 (substring-no-properties txt 1 (1- (length
                                                     txt)))))
             statements)))
+
+
+(defconst scad-ts--import-call-query
+  '(
+    ;; import("path")
+    (module_call
+     name: (identifier) @fn
+     arguments: (arguments (string) @path)
+     (:match "import" @fn))
+    ;; import(file="path", ...)
+    (module_call
+     name: (identifier) @fn
+     arguments: (arguments
+                 (assignment
+                  name: (identifier) @kw
+                  value: (string) @path))
+     (:match "import" @fn)
+     (:match "file" @kw)))
+  "Tree-sitter query capturing import() file path strings.")
+
+
+
+
+(defun scad-ts-mode--import-calls ()
+  "Return a list of file paths from OpenSCAD import(...) calls."
+  (let* ((caps (treesit-query-capture
+                (scad-ts-mode--buffer-root-node)
+                scad-ts--import-call-query))
+         (strings
+          (cl-loop for (cap . node) in caps
+                   when (eq cap 'path)
+                   collect (treesit-node-text node t))))
+    ;; captured (string) includes quotes -> strip them
+    (mapcar (lambda (s)
+              (string-trim s "\"" "\""))
+            strings)))
+
 
 (defun scad-ts-mode--variable-declarations ()
   "Collect variable declaration identifiers and return them paired with nodes."
@@ -316,8 +427,155 @@ Argument FUNCTIONS is a list of function names used to match builtins."
                        (treesit-node-type node))
        (treesit-node-top-level node scad-ts-mode--defun-type-regexp)))
 
+(defun scad-ts-mode--inside-comment-or-stringp (&optional pos pps)
+  "Check if POS is inside a comment or string using `syntax-ppss'.
+
+Optional argument POS is the position to check, defaulting to the current point.
+
+Optional argument PPS is the precomputed `syntax-ppss' state, defaulting to
+nil."
+  (let ((pps (or pps
+                 (syntax-ppss (or pos (point))))))
+    (or (nth 4 pps)
+        (nth 3 pps))))
+
+
+(defun scad-ts-mode--resolve-path-node (node &optional dir)
+  "Resolve a path NODE to an existing absolute filename with its range.
+
+Argument NODE is a tree-sitter node whose text is a path string.
+
+Optional argument DIR is a directory used as base for expanding NODE;
+default value is nil."
+  (let ((curr-path (string-trim (treesit-node-text node)
+                                "\"" "\"")))
+    (unless (file-name-absolute-p curr-path)
+      (let ((full-name (expand-file-name curr-path dir)))
+        (when (file-exists-p full-name)
+          (list (treesit-node-start node)
+                (treesit-node-end node)
+                (prin1-to-string full-name)))))))
+
+(defun scad-ts-mode--write-current-buffer (infile)
+  "Write the current buffer to a file, resolving relative imports.
+
+Argument INFILE is the file path where the current buffer's content will be
+written."
+  (save-restriction
+    (widen)
+    (let* ((root-node (scad-ts-mode--buffer-root-node))
+           (nodes (treesit-query-capture
+                   root-node
+                   scad-ts--import-call-query))
+           (resolved-paths
+            (delq nil
+                  (cl-loop
+                   for (cap . node) in nodes
+                   when (eq cap 'path)
+                   collect
+                   (scad-ts-mode--resolve-path-node node
+                                                    default-directory)))))
+      (if (not resolved-paths)
+          (write-region (point-min)
+                        (point-max) infile nil 'nomsg)
+        (let ((scad-buff (current-buffer)))
+          (scad-ts-mode--debug 'flymake "Resolving %d import calls in %s"
+                               (length resolved-paths)
+                               scad-buff)
+          (with-temp-buffer
+            (insert-buffer-substring scad-buff)
+            (goto-char (point-max))
+            (setq resolved-paths (nreverse resolved-paths))
+            (pcase-dolist (`(,beg ,end ,rep) resolved-paths)
+              (goto-char beg)
+              (delete-region beg end)
+              (insert rep))
+            (write-region
+             (point-min)
+             (point-max) infile nil 'nomsg)))))))
+
+
+(defvar-local scad-ts-mode--flymake-proc nil)
+
+
+(defun scad-ts-mode-flymake (report-fn &rest _args)
+  "Flymake backend, diagnostics are passed to REPORT-FN."
+  (unless (executable-find
+           scad-ts-mode-openscad-command)
+    (error "Cannot find `%s'" scad-ts-mode-openscad-command))
+  (when (process-live-p scad-ts-mode--flymake-proc)
+    (delete-process scad-ts-mode--flymake-proc))
+  (let* ((buffer (current-buffer))
+         (infile (make-temp-file "scad-ts-mode-flymake-" nil ".scad"))
+         (outfile (concat (file-name-sans-extension infile) ".ast")))
+    (scad-ts-mode--write-current-buffer infile)
+    (with-environment-variables
+        (("OPENSCADPATH"
+          (if-let* ((path (getenv "OPENSCADPATH")))
+              (concat default-directory path-separator path)
+            default-directory)))
+      (let ((cmd-args (append (list scad-ts-mode-openscad-command "-o"
+                                    outfile infile)
+                              scad-ts-mode-openscad-extra-args)))
+        (when scad-ts-mode-debug
+          (scad-ts-mode--debug 'flymake "Running flymake command '%s' in %s"
+                               (string-join (delq nil cmd-args) " ")
+                               (current-buffer)))
+        (setq scad-ts-mode--flymake-proc
+              (make-process
+               :name "scad-ts-flymake"
+               :noquery t
+               :connection-type 'pipe
+               :buffer (generate-new-buffer " *scad-ts-flymake*")
+               :command cmd-args
+               :sentinel
+               (lambda (proc _event)
+                 (when (memq (process-status proc) '(exit signal))
+                   (unwind-protect
+                       (when (and (buffer-live-p buffer)
+                                  (eq proc
+                                      (buffer-local-value
+                                       'scad-ts-mode--flymake-proc buffer)))
+                         (with-current-buffer (process-buffer proc)
+                           (goto-char (point-min))
+                           (let (diags)
+                             (while (search-forward-regexp
+                                     "^\\(ERROR\\|WARNING\\): \\(.*?\\),? in file [^,]+, line \\([0-9]+\\)"
+                                     nil t)
+                               (let ((msg (match-string 2))
+                                     (type (if (equal (match-string 1)
+                                                      "ERROR")
+                                               :error :warning))
+                                     (region (flymake-diag-region
+                                              buffer
+                                              (string-to-number
+                                               (match-string 3)))))
+                                 (push (flymake-make-diagnostic buffer
+                                                                (car region)
+                                                                (cdr region)
+                                                                type
+                                                                msg)
+                                       diags)))
+                             (funcall report-fn (nreverse diags)))))
+                     (delete-file outfile)
+                     (delete-file infile)
+                     (kill-buffer (process-buffer proc)))))))))))
+
+(defun scad-ts-mode-enable-flymake ()
+  "Enable Flymake diagnostics by adding the SCAD backend function locally."
+  (interactive)
+  (when buffer-file-name
+    (add-hook 'flymake-diagnostic-functions #'scad-ts-mode-flymake nil 'local)
+    (unless (bound-and-true-p flymake-mode)
+      (flymake-mode 1))))
+
+(defun scad-ts-mode-disable-flymake ()
+  "Remove the local Flymake diagnostic function hook for this mode."
+  (interactive)
+  (remove-hook 'flymake-diagnostic-functions #'scad-ts-mode-flymake 'local))
+
 ;;;###autoload
-(define-derived-mode scad-ts-mode scad-mode "OpenSCAD"
+(define-derived-mode scad-ts-mode prog-mode "OpenSCAD"
   "Major mode for editing OpenSCAD using tree-sitter."
   :group 'scad-ts
   :after-hook (c-update-modeline)
