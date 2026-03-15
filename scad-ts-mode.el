@@ -223,7 +223,7 @@ forward, and backward."
                                                      "CGAL cache size in bytes")
                                                     (seq
                                                      "Geometry cache size in bytes"))
-                                                (* anychar) eol)
+                                                (* not-newline) eol)
   "Lines matching this regexp are removed from \"*scad-ts preview output*\"."
   :type 'regexp)
 
