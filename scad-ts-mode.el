@@ -106,7 +106,7 @@ Extra command line arguments passed to the OpenSCAD executable.
 
 The value is a list of strings, each string being one argument.
 
-Example value: \\='(\"--backend=Manifold\" \"--enable=roof\")"
+Example value: \\='(\"--backend=Manifold\" \"--enable=roof\" \"--enable=textmetrics\")"
   :type '(repeat string))
 
 (defcustom scad-ts-mode-debug nil
@@ -207,24 +207,33 @@ forward, and backward."
   :group 'scad-ts
   :type 'integer)
 
-(defcustom scad-ts-mode-preview-hide-regexp (rx bol
-                                                (or (seq "FALLBACK" (+ space)
-                                                         "(log once):")
-                                                    (seq
-                                                     "Normalized CSG tree has"
-                                                     (+
-                                                      space)
-                                                     (+ digit)
-                                                     (+ space) "elements")
-                                                    (seq "Geometries in cache:")
-                                                    (seq
-                                                     "CGAL Polyhedrons in cache")
-                                                    (seq
-                                                     "CGAL cache size in bytes")
-                                                    (seq
-                                                     "Geometry cache size in bytes"))
-                                                (* not-newline) eol)
-  "Lines matching this regexp are removed from \"*scad-ts preview output*\"."
+(defcustom scad-ts-mode-preview-hide-regexp
+  (rx bol
+      (or
+       (seq "FALLBACK" (+ space)
+            "(log once):")
+       (seq
+        "Normalized CSG tree has"
+        (+ space)
+        (+ digit)
+        (+ space) "elements")
+       (seq "Geometries in cache:")
+       (seq
+        "CGAL Polyhedrons in cache")
+       (seq
+        "CGAL cache size in bytes")
+       (seq
+        "Geometry cache size in bytes"))
+      (* not-newline) eol)
+  "Regular expression matching preview log lines to hide from displayed output.
+
+Regular expression matching preview output lines to remove.
+
+When a line between the preview buffer bounds matches the expression,
+the entire line is deleted.
+
+Intended for filtering noisy status messages such as cache summaries
+or CSG normalization reports."
   :type 'regexp)
 
 
@@ -306,15 +315,15 @@ already represent a top view,the function will invoke its reverse command
          (cdr scad-ts-preview-colorscheme))
         (t (car scad-ts-preview-colorscheme))))
 
-(defvar-local scad-ts-mode--preview-proc        nil)
-(defvar-local scad-ts-mode--preview-timer       nil)
-(defvar-local scad-ts-mode--preview-image       nil)
+(defvar-local scad-ts-mode--preview-proc nil)
+(defvar-local scad-ts-mode--preview-timer nil)
+(defvar-local scad-ts-mode--preview-image nil)
 
 (defvar-local scad-ts-mode--preview-mode-status nil)
 (defvar-local scad-ts-mode--preview-mode-camera nil)
 
 (defun scad-ts-preview-projection ()
-  "Toggle the preview projection between orthographic and perspective, then render."
+  "Toggle the preview projection between orthographic and perspective."
   (interactive nil scad-ts-preview-mode)
   (setq-local scad-ts-preview-projection
               (if (eq scad-ts-preview-projection 'ortho)
@@ -536,15 +545,8 @@ Argument OFF is a number used as the signed base movement amount."
                  (if offset (prefix-numeric-value offset) ,(abs off))))
      (scad-ts-mode--preview-render)))
 
-
-(scad-ts-mode--define-preview-move translate-x+ 0 10)
-(scad-ts-mode--define-preview-move translate-x- 0 -10)
-(scad-ts-mode--define-preview-move translate-y+ 1 10)
-(scad-ts-mode--define-preview-move translate-y- 1 -10)
-(scad-ts-mode--define-preview-move translate-z+ 2 10)
-(scad-ts-mode--define-preview-move translate-z- 2 -10)
 (scad-ts-mode--define-preview-move rotate-x+ 3 10)
-(scad-ts-mode--define-preview-move rotate-x- 3 -20)
+(scad-ts-mode--define-preview-move rotate-x- 3 -10)
 (scad-ts-mode--define-preview-move rotate-y+ 4 10)
 (scad-ts-mode--define-preview-move rotate-y- 4 -10)
 (scad-ts-mode--define-preview-move rotate-z+ 5 10)
@@ -1779,7 +1781,7 @@ The result is a list of 9 numbers (row-major order):
         (* (nth 1 v) s)
         (* (nth 2 v) s)))
 
-(defun scad-ts-previrew--extra-vector-dot (v1 v2)
+(defun scad-ts-preview--extra-vector-dot (v1 v2)
   "Return the dot product of 3D vectors V1 and V2."
   (+ (* (nth 0 v1)
         (nth 0 v2))
@@ -1805,7 +1807,7 @@ The result is a list of 9 numbers (row-major order):
 
 (defun scad-ts-preview--vector-norm (v)
   "Return the Euclidean norm (length) of 3D vector V."
-  (sqrt (scad-ts-previrew--extra-vector-dot v v)))
+  (sqrt (scad-ts-preview--extra-vector-dot v v)))
 
 (defun scad-ts-preview--vector-normalize (v)
   "Return a normalized copy of the 3D vector V.
@@ -1834,7 +1836,7 @@ positions 3-5."
                             (- r22)))
          (forward (scad-ts-preview--vector-normalize forward-raw))
          (world-up '(0 0 1))
-         (dot (scad-ts-previrew--extra-vector-dot world-up forward))
+         (dot (scad-ts-preview--extra-vector-dot world-up forward))
          (proj (scad-ts-preview--vector-scale forward dot))
          (screen-up-raw (scad-ts-preview--vector-subtract world-up proj))
          (screen-up (if (< (scad-ts-preview--vector-norm screen-up-raw) 1e-3)
@@ -1872,7 +1874,8 @@ positions 3-5."
 
 Optional argument STEP specifies the translation step size.
 
-If not provided, it defaults to the value of `scad-ts-preview-translation-step'."
+If not provided, it defaults to the value of
+`scad-ts-preview-translation-step'."
   (interactive (list
                 (when current-prefix-arg
                   (prefix-numeric-value
@@ -1892,7 +1895,8 @@ If not provided, it defaults to the value of `scad-ts-preview-translation-step'.
 
 Optional argument STEP specifies the translation step size.
 
-If not provided, it defaults to the value of `scad-ts-preview-translation-step'."
+If not provided, it defaults to the value
+of `scad-ts-preview-translation-step'."
   (interactive (list
                 (when current-prefix-arg
                   (prefix-numeric-value
@@ -1912,7 +1916,8 @@ If not provided, it defaults to the value of `scad-ts-preview-translation-step'.
 
 Optional argument STEP specifies the translation step size.
 
-If not provided, it defaults to the value of `scad-ts-preview-translation-step'."
+If not provided, it defaults to the value
+of `scad-ts-preview-translation-step'."
   (interactive (list
                 (when current-prefix-arg
                   (prefix-numeric-value
@@ -1934,7 +1939,8 @@ If not provided, it defaults to the value of `scad-ts-preview-translation-step'.
 
 Optional argument STEP specifies the translation step size.
 
-If not provided, it defaults to the value of `scad-ts-preview-translation-step'."
+If not provided, it defaults to the value
+of `scad-ts-preview-translation-step'."
   (interactive (list
                 (when current-prefix-arg
                   (prefix-numeric-value
@@ -1948,7 +1954,8 @@ If not provided, it defaults to the value of `scad-ts-preview-translation-step'.
 
 Optional argument STEP specifies the translation step size.
 
-If not provided, it defaults to the value of `scad-ts-preview-translation-step'."
+If not provided, it defaults to the value of
+`scad-ts-preview-translation-step'."
   (interactive (list
                 (when current-prefix-arg
                   (prefix-numeric-value
@@ -1964,7 +1971,8 @@ If not provided, it defaults to the value of `scad-ts-preview-translation-step'.
 
 Optional argument STEP specifies the translation step size.
 
-If not provided, it defaults to the value of `scad-ts-preview-translation-step'."
+If not provided, it defaults to the value of
+`scad-ts-preview-translation-step'."
   (interactive  (list
                  (when current-prefix-arg
                    (prefix-numeric-value
@@ -2049,54 +2057,60 @@ If not provided, it defaults to the value of `scad-ts-preview-translation-step'.
                                     (or
                                      (mapcar #'length vals)
                                      '(20))))))
-            (mapcar (lambda (value)
-                      (let ((key (concat "-"
-                                         (substring-no-properties value 0 1)))
-                            (doc value)
-                            (arg (format "--enable=%s" value)))
-                        (let ((sym (make-symbol (concat
-                                                 "scad-ts--toggle-enable-"
-                                                 value))))
-                          (defalias sym
-                            (lambda ()
-                              (interactive)
-                              (let ((next-val
-                                     (if
-                                         (member
-                                          arg
-                                          scad-ts-mode-openscad-extra-args)
-                                         (remove
-                                          arg
-                                          scad-ts-mode-openscad-extra-args)
-                                       (append
-                                        scad-ts-mode-openscad-extra-args
-                                        (list
-                                         arg)))))
-                                (cond ((derived-mode-p
-                                        'scad-ts-preview-mode)
-                                       (setq-local scad-ts-mode-openscad-extra-args
-                                                   next-val)
-                                       (scad-ts-mode--preview-render))
-                                      (t
-                                       (setq scad-ts-mode-openscad-extra-args next-val)))
-                                (transient-setup
-                                 transient-current-command)))
-                            doc)
-                          (list key sym
-                                :description
-                                (lambda ()
-                                  (let* ((active (member arg scad-ts-mode-openscad-extra-args))
-                                         (descr (scad-ts--format-toggle
-                                                 value
-                                                 active
-                                                 nil
-                                                 nil
-                                                 nil
-                                                 nil
-                                                 nil
-                                                 longest)))
-                                    descr))))))
-                    vals)))))
+            (mapcar
+             (lambda (value)
+               (let ((key (concat "-"
+                                  (substring-no-properties value 0 1)))
+                     (doc value)
+                     (arg (format "--enable=%s" value)))
+                 (let ((sym (make-symbol (concat
+                                          "scad-ts--toggle-enable-"
+                                          value))))
+                   (defalias sym
+                     (lambda ()
+                       (interactive)
+                       (let ((next-val
+                              (if
+                                  (member
+                                   arg
+                                   scad-ts-mode-openscad-extra-args)
+                                  (remove
+                                   arg
+                                   scad-ts-mode-openscad-extra-args)
+                                (append
+                                 scad-ts-mode-openscad-extra-args
+                                 (list
+                                  arg)))))
+                         (cond ((derived-mode-p
+                                 'scad-ts-preview-mode)
+                                (setq-local scad-ts-mode-openscad-extra-args
+                                            next-val)
+                                (scad-ts-mode--preview-render))
+                               (t
+                                (setq scad-ts-mode-openscad-extra-args
+                                      next-val)))
+                         (transient-setup
+                          transient-current-command)))
+                     doc)
+                   (list key
+                         sym
+                         :description
+                         (lambda ()
+                           (let* ((active
+                                   (member
+                                    arg
+                                    scad-ts-mode-openscad-extra-args))
+                                  (descr (scad-ts--format-toggle
+                                          value
+                                          active
+                                          nil
+                                          nil
+                                          nil
+                                          nil
+                                          nil
+                                          longest)))
+                             descr))))))
+             vals)))))
 
 
 ;;;###autoload (autoload 'scad-ts-preview-menu "scad-ts" nil t)
