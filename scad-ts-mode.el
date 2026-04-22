@@ -635,7 +635,9 @@ similar to `format' function arguments."
     (with-current-buffer (get-buffer-create "*scad-ts-mode-debug*")
       (goto-char (point-max))
       (insert (format "%s" tag) " -> " (apply #'format args) "\n")
-      (when (numberp scad-ts-mode-debug)
+      (when (or
+             (numberp scad-ts-mode-debug)
+             (seq-find #'numberp scad-ts-mode-debug))
         (apply #'message args)))))
 
 
@@ -988,24 +990,30 @@ written."
 
 (defvar-local scad-ts-mode--flymake-proc nil)
 
+(defvar scad-ts-mode--openscad-found nil)
 
 (defun scad-ts-mode-flymake (report-fn &rest _args)
   "Flymake backend, diagnostics are passed to REPORT-FN."
-  (unless (executable-find
-           scad-ts-mode-openscad-command)
-    (error "Cannot find `%s'" scad-ts-mode-openscad-command))
-  (when (process-live-p scad-ts-mode--flymake-proc)
-    (delete-process scad-ts-mode--flymake-proc))
+  (unless scad-ts-mode--openscad-found
+    (setq scad-ts-mode--openscad-found (executable-find
+                                        scad-ts-mode-openscad-command))
+    (unless scad-ts-mode--openscad-found
+      (user-error "Cannot find `%s'" scad-ts-mode-openscad-command)))
   (let* ((buffer (current-buffer))
          (infile (make-temp-file "scad-ts-mode-flymake-" nil ".scad"))
          (outfile (concat (file-name-sans-extension infile) ".ast")))
+    (when (and scad-ts-mode--flymake-proc
+               (process-live-p scad-ts-mode--flymake-proc))
+      (scad-ts-mode--debug 'flymake "Cancelling flymake process in buffer %s"
+                           buffer)
+      (delete-process scad-ts-mode--flymake-proc))
     (scad-ts-mode--write-current-buffer infile)
     (with-environment-variables
         (("OPENSCADPATH"
           (if-let* ((path (getenv "OPENSCADPATH")))
               (concat default-directory path-separator path)
             default-directory)))
-      (let ((cmd-args (append (list scad-ts-mode-openscad-command "-o"
+      (let ((cmd-args (append (list scad-ts-mode--openscad-found "-o"
                                     outfile infile)
                               scad-ts-mode-openscad-extra-args)))
         (when scad-ts-mode-debug
@@ -1020,37 +1028,56 @@ written."
                :buffer (generate-new-buffer " *scad-ts-flymake*")
                :command cmd-args
                :sentinel
-               (lambda (proc _event)
-                 (when (memq (process-status proc) '(exit signal))
-                   (unwind-protect
-                       (when (and (buffer-live-p buffer)
-                                  (eq proc
-                                      (buffer-local-value
-                                       'scad-ts-mode--flymake-proc buffer)))
-                         (with-current-buffer (process-buffer proc)
-                           (goto-char (point-min))
-                           (let (diags)
-                             (while (search-forward-regexp
-                                     "^\\(ERROR\\|WARNING\\): \\(.*?\\),? in file [^,]+, line \\([0-9]+\\)"
-                                     nil t)
-                               (let ((msg (match-string 2))
-                                     (type (if (equal (match-string 1)
-                                                      "ERROR")
-                                               :error :warning))
-                                     (region (flymake-diag-region
-                                              buffer
-                                              (string-to-number
-                                               (match-string 3)))))
-                                 (push (flymake-make-diagnostic buffer
-                                                                (car region)
-                                                                (cdr region)
-                                                                type
-                                                                msg)
-                                       diags)))
-                             (funcall report-fn (nreverse diags)))))
-                     (delete-file outfile)
-                     (delete-file infile)
-                     (kill-buffer (process-buffer proc)))))))))))
+               (lambda (proc event)
+                 (let ((proc-status (process-status proc)))
+                   (when scad-ts-mode-debug
+                     (scad-ts-mode--debug 'flymake "Flymake process event: %s, status: %s"
+                                          event
+                                          proc-status))
+                   (unless (process-live-p proc)
+                     (let ((proc-ex-status (process-exit-status proc))
+                           (proc-buff (process-buffer proc)))
+                       (scad-ts-mode--debug 'flymake "Flymake process exit status %s"
+                                            proc-ex-status)
+                       (unwind-protect
+                           (cond
+                            ((not
+                              (and (buffer-live-p buffer)
+                                   (eq proc
+                                       (buffer-local-value
+                                        'scad-ts-mode--flymake-proc
+                                        buffer))))
+                             (flymake-log :warning
+                                          "process %s obsolete" proc))
+                            ((zerop proc-ex-status)
+                             (with-current-buffer (process-buffer proc)
+                               (goto-char (point-min))
+                               (let (diags)
+                                 (while (search-forward-regexp
+                                         "^\\(ERROR\\|WARNING\\): \\(.*?\\),? in file [^,]+, line \\([0-9]+\\)"
+                                         nil t)
+                                   (let ((msg (match-string 2))
+                                         (type (if (equal (match-string 1)
+                                                          "ERROR")
+                                                   :error :warning))
+                                         (region (flymake-diag-region
+                                                  buffer
+                                                  (string-to-number
+                                                   (match-string 3)))))
+                                     (push (flymake-make-diagnostic buffer
+                                                                    (car region)
+                                                                    (cdr region)
+                                                                    type
+                                                                    msg)
+                                           diags)))
+                                 (funcall report-fn (nreverse diags)))))
+                            (t
+                             (when scad-ts-mode-debug
+                               (scad-ts-mode--debug 'flymake "Flymake process is died"))))
+                         (ignore-errors (delete-file outfile))
+                         (ignore-errors (delete-file infile))
+                         (when (buffer-live-p proc-buff)
+                           (kill-buffer proc-buff)))))))))))))
 
 (defun scad-ts-mode-enable-flymake ()
   "Enable Flymake diagnostics by adding the SCAD backend function locally."
