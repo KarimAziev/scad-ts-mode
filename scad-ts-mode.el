@@ -808,9 +808,10 @@ Argument FUNCTIONS is a list of function names used to match builtins."
            :feature keyword
            ((["assign" "each" "function" "let" "module"]
              @font-lock-keyword-face)
-            ([(assert_statement "assert")
-              (assert_expression "assert")]
-             @font-lock-keyword-face)
+            ;; Assertion nodes include the following statement or expression.
+            ;; Capture only the keyword, not that entire body.
+            (assert_statement "assert" @font-lock-keyword-face)
+            (assert_expression "assert" @font-lock-keyword-face)
             ((boolean) @font-lock-keyword-face)
             (["if" "else"] @font-lock-keyword-face)
             (["for" "intersection_for"]
