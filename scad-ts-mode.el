@@ -355,13 +355,32 @@ already represent a top view,the function will invoke its reverse command
     (cancel-timer scad-ts-mode--preview-timer)
     (setq scad-ts-mode--preview-timer nil)))
 
+(defmacro scad-ts-mode--with-buffer-visual-line-mode (buff-name &rest body)
+    "Run BODY in BUFF-NAME, enabling `visual-line-mode' when needed.
+
+Argument BUFF-NAME is a form yielding the buffer name or buffer object.
+
+Remaining arguments BODY are forms evaluated in the selected buffer."
+    (declare (indent 1)
+             (debug t))
+    (let ((buff-var (make-symbol "buff"))
+          (buff-exists-var (make-symbol "buff-exists")))
+      `(let* ((,buff-var (get-buffer ,buff-name))
+              (,buff-exists-var (and ,buff-var t)))
+        (with-current-buffer (setq ,buff-var (get-buffer-create ,buff-name))
+         (unless
+             (or ,buff-exists-var
+              (bound-and-true-p visual-line-mode))
+           (visual-line-mode 1))
+         ,@body))))
+
 (defvar scad-ts-mode--preview-output-buffer-name
   "*scad-ts preview output*")
 
 (defun scad-ts--preview-ensure-output-buffer ()
   "Make sure the output buffer has highlighting configured."
-  (with-current-buffer (get-buffer-create
-                        scad-ts-mode--preview-output-buffer-name)
+  (scad-ts-mode--with-buffer-visual-line-mode
+      scad-ts-mode--preview-output-buffer-name
     (setq-local window-point-insertion-type t)
     (setq buffer-read-only t)
     (setq-local font-lock-defaults '(scad-ts-preview-font-lock-keywords t))
@@ -626,7 +645,6 @@ buffer is killed."
             nil 'local))
 
 
-
 (defun scad-ts-mode--debug (tag &rest args)
   "Log debug messages based on the variable `scad-ts-mode-debug'.
 
@@ -634,17 +652,20 @@ Argument TAG is a symbol or string used to identify the debug message.
 
 Remaining arguments ARGS are format string followed by objects to format,
 similar to `format' function arguments."
-  (when (and scad-ts-mode-debug
-             (or (eq scad-ts-mode-debug t)
-                 (numberp scad-ts-mode-debug)
-                 (and (listp scad-ts-mode-debug)
-                      (memq tag scad-ts-mode-debug))))
-    (with-current-buffer (get-buffer-create "*scad-ts-mode-debug*")
+  (when
+      (and scad-ts-mode-debug
+           (or (eq scad-ts-mode-debug t)
+               (numberp scad-ts-mode-debug)
+               (and (listp scad-ts-mode-debug)
+                    (memq tag scad-ts-mode-debug))))
+    (scad-ts-mode--with-buffer-visual-line-mode "*scad-ts-mode-debug*"
       (goto-char (point-max))
-      (insert (format "%s" tag) " -> " (apply #'format args) "\n")
-      (when (or
-             (numberp scad-ts-mode-debug)
-             (seq-find #'numberp scad-ts-mode-debug))
+      (insert
+       (format "%s" tag) " -> " (apply #'format args) "\n")
+      (when
+          (or
+           (numberp scad-ts-mode-debug)
+           (seq-find #'numberp scad-ts-mode-debug))
         (apply #'message args)))))
 
 
