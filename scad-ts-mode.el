@@ -973,7 +973,7 @@ written."
           (write-region (point-min)
                         (point-max) infile nil 'nomsg)
         (let ((buff (current-buffer)))
-          (scad-ts-mode--debug 'flymake "Resolving %d import calls in %s"
+          (scad-ts-mode--debug 'preview "Resolving %d import calls in %s"
                                (length resolved-paths)
                                buff)
           (with-temp-buffer
