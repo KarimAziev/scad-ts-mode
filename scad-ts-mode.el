@@ -416,8 +416,9 @@ mark."
            (win (get-buffer-window buffer)))
       (scad-ts-mode--preview-kill)
       (scad-ts-mode--preview-status "Render")
-      (unless (and scad-ts-mode--preview-render-auto-display-disabled
-                   (not scad-ts-mode--preview-force-display))
+      (unless
+          (and scad-ts-mode--preview-render-auto-display-disabled
+               (not scad-ts-mode--preview-force-display))
         (setq scad-ts-mode--preview-force-display nil)
         (unless win
           (setq win (display-buffer
@@ -425,6 +426,7 @@ mark."
       (let* ((infile (make-temp-file "scad-ts-preview-" nil ".scad"))
              (basefile (file-name-sans-extension infile))
              (outfile (concat basefile ".tmp.png"))
+             (start-time nil)
              (win-size (if (and win
                                 (window-live-p win))
                            (cons (window-pixel-width win)
@@ -439,7 +441,8 @@ mark."
               (if-let* ((path (getenv "OPENSCADPATH")))
                   (concat default-directory path-separator path)
                 default-directory)))
-          (setq scad-ts-mode--preview-proc
+          (setq start-time (current-time)
+                scad-ts-mode--preview-proc
                 (make-process
                  :noquery t
                  :connection-type 'pipe
@@ -451,6 +454,10 @@ mark."
                    (unwind-protect
                        (when (and (buffer-live-p buffer)
                                   (memq (process-status proc) '(exit signal)))
+                         (scad-ts-mode--debug
+                          'preview "Render done in %.3f s: %s"
+                          (float-time (time-subtract (current-time) start-time))
+                          outfile)
                          (with-current-buffer buffer
                            (setq scad-ts-mode--preview-proc nil)
                            (if (not (ignore-errors
